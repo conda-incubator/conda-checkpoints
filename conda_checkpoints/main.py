@@ -51,7 +51,16 @@ def explicit(prefix: Path) -> str:
         text=True,
     )
     if p.returncode:
-        return f"# 'conda list -p {prefix}' failed"
+        contents = [f"# 'conda list -p {prefix}' failed:", f"# returncode: {p.returncode}"]
+        for line in p.stdout.splitlines():
+            contents.append(f"# stdout: {line}")
+        for line in p.stderr.splitlines():
+            contents.append(f"# stderr: {line}")
+        logger.warning(
+            "Could not obtain checkpoint!. Check files at %s for more details.",
+            prefix / 'conda-meta' / 'checkpoints'
+        )
+        return "\n".join(contents)
     return p.stdout
 
 
