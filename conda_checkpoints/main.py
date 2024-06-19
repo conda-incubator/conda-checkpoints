@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import io
 import os
-from contextlib import redirect_stdout
-from datetime import datetime, UTC
+import sys
+from datetime import datetime, timezone
 from logging import getLogger
 from pathlib import Path
+from subprocess import run
 
 from conda.base.context import context
-from conda.cli.main_list import print_explicit
 
 from . import __version__
 
@@ -27,9 +26,11 @@ def plugin_hook_implementation(command: str):
         return
     if command not in COMMANDS:
         raise ValueError(f"command {command} not recognized.")
-    now = datetime.now(tz=UTC)
+    now = datetime.now(tz=timezone.UTC)
     timestamp = now.strftime("%Y-%m-%d-%H-%M-%S")
     target_prefix = Path(context.target_prefix)
+
+    # @EXPLICIT lockfile
     lockfile_contents = f"# Lockfile generated on {now} by conda-checkpoints v{__version__}\n"
     lockfile_contents += explicit(target_prefix)
     if not env_changed(target_prefix, lockfile_contents):
@@ -39,12 +40,19 @@ def plugin_hook_implementation(command: str):
     lockfile_path.write_text(lockfile_contents)
 
 
+
 def explicit(prefix: Path) -> str:
-    memfile = io.StringIO()
-    with redirect_stdout(memfile):
-        print_explicit(prefix, add_md5=True)
-    memfile.seek(0)
-    return memfile.read()
+    """
+    Use subprocess to run the whole post_command plugin chain.
+    """
+    p = run(
+        [sys.executable, "-m", "conda", "list", "-p", str(prefix), "--explicit", "--md5"],
+        capture_output=True,
+        text=True,
+    )
+    if p.returncode:
+        return f"# 'conda list -p {prefix}' failed"
+    return p.stdout
 
 
 def env_changed(prefix: Path, current_contents: str) -> bool:
