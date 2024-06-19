@@ -13,6 +13,7 @@ from . import __version__
 
 logger = getLogger(f"conda.{__name__}")
 COMMANDS = {"create", "install", "update", "remove"}
+CHECKPOINTS_PATH_TEMPLATE = "{prefix}/conda-meta/checkpoints/{timestamp}.txt"
 
 
 def plugin_hook_implementation(command: str):
@@ -26,24 +27,30 @@ def plugin_hook_implementation(command: str):
         return
     if command not in COMMANDS:
         raise ValueError(f"command {command} not recognized.")
-    now = datetime.now(tz=timezone.UTC)
+    now = datetime.now(tz=timezone.utc)
     timestamp = now.strftime("%Y-%m-%d-%H-%M-%S")
     target_prefix = Path(context.target_prefix)
+    lockfile_path = Path(
+        CHECKPOINTS_PATH_TEMPLATE.format(prefix=target_prefix, timestamp=timestamp)
+    )
 
     # @EXPLICIT lockfile
     lockfile_contents = f"# Lockfile generated on {now} by conda-checkpoints v{__version__}\n"
-    lockfile_contents += explicit(target_prefix)
+    ok, more_lockfile_contents = explicit(target_prefix)
+    lockfile_contents += more_lockfile_contents
     if not env_changed(target_prefix, lockfile_contents):
         return
-    lockfile_path = target_prefix / "conda-meta" / "checkpoints" / f"{timestamp}.txt"
     lockfile_path.parent.mkdir(parents=True, exist_ok=True)
     lockfile_path.write_text(lockfile_contents)
+    if not ok:
+        logger.warning("Could not generate checkpoint. Check details at %s", lockfile_path)
 
 
-
-def explicit(prefix: Path) -> str:
+def explicit(prefix: Path) -> tuple[bool, str]:
     """
-    Use subprocess to run the whole post_command plugin chain.
+    Use a subprocess to run the whole post_command plugin chain.
+
+    Returns (bool, str) as in (success, lockfile contents)
     """
     p = run(
         [sys.executable, "-m", "conda", "list", "-p", str(prefix), "--explicit", "--md5"],
@@ -56,12 +63,8 @@ def explicit(prefix: Path) -> str:
             contents.append(f"# stdout: {line}")
         for line in p.stderr.splitlines():
             contents.append(f"# stderr: {line}")
-        logger.warning(
-            "Could not obtain checkpoint!. Check files at %s for more details.",
-            prefix / 'conda-meta' / 'checkpoints'
-        )
-        return "\n".join(contents)
-    return p.stdout
+        return False, "\n".join(contents)
+    return True, p.stdout
 
 
 def env_changed(prefix: Path, current_contents: str) -> bool:
